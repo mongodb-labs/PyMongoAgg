@@ -13,14 +13,20 @@ class PipelineObject:
             return [PipelineObject.get_name(i) for i in obj.children]
         if hasattr(obj, "id"):
             return f"${obj.id}"
-        elif isinstance(obj, ast.BinOp):
+        if isinstance(obj, ast.BinOp):
             return PipelineObject.get_name(obj.left) or PipelineObject.get_name(
                 obj.right
             )
-        else:
-            return obj.value
+        if isinstance(obj, str):
+            return f"${obj}"
+        return obj.value
 
     def doc(self):
+        if self.name and not self.op:
+            children = [self.get_name(n) for n in self.children]
+            if len(children) == 1:
+                return {"$set": {self.children[0]: f"${self.name}"}}
+            return {"$set": {self.name: children}}
         if self.name is None:
             return {
                 self.op: [
@@ -28,7 +34,12 @@ class PipelineObject:
                     for i in self.children
                 ]
             }
-        return {"$set": {self.name: self.children[0].doc()}}
+        if isinstance(self.children[0], str):
+            child = self.children[0]
+        else:
+            child = self.children[0].doc()
+        return {"$set": {self.name: child}}
+
 
 
 ops_map = {
@@ -45,7 +56,11 @@ class AggregationMapper(ast.NodeTransformer):
         self.cur_obj = None
         self.objects = []
 
-    def visit_BinOp(self, node: ast.BinOp):
+    def visit_BinOp(self, node):
+        if isinstance(node, ast.Name):
+            return node.id
+        if isinstance(node, ast.Call):
+            return self.visit_Call(node)
         if not isinstance(node.left, PipelineObject):
             self.visit(node.left)
         if not isinstance(node.right, PipelineObject):
@@ -63,11 +78,18 @@ class AggregationMapper(ast.NodeTransformer):
 
     def visit_Assign(self, node):
         pipelines = self.visit_BinOp(node.value)
-        self.objects.append(
-            PipelineObject(
-                node.targets[0].id, operation=pipelines.op, children=[pipelines]
+        if isinstance(pipelines, str):
+            self.objects.append(PipelineObject(pipelines, operation=None, children=[self.visit_BinOp(n) for n in node.targets]))
+        else:
+            self.objects.append(
+                PipelineObject(
+                    node.targets[0].id, operation=pipelines.op, children=[pipelines]
+                )
             )
-        )
+
+    def visit_Call(self, node):
+        return PipelineObject(None, operation=f"${node.func.id}", children=list(map(self.visit_BinOp,node.args)))
+
 
 
 def transpile_function(func):
@@ -85,9 +107,9 @@ from bson.decimal128 import create_decimal128_context
 
 
 def basic_func():
-    y = a + 0
+    y = a
     a = (a + b) / 2
-    b = (b * y) ** (1 / 2)
+    b = sqrt(b * y)
     t = t - (x * (y - a) ** 2)
     x = x * 2
 
