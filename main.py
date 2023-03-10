@@ -93,6 +93,7 @@ def basic_func():
 
 
 output_dict = transpile_function(basic_func)
+print(output_dict)
 
 coll = MongoClient().db.coll
 coll.drop()
@@ -131,3 +132,4 @@ coll.update_one(
 )
 print(coll.find_one({}, projection={"pi": 1, "_id": 0}))
 from math import pi
+print(pi)
