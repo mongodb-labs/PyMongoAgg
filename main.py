@@ -28,7 +28,6 @@ class PipelineObject:
                     for i in self.children
                 ]
             }
-        print(self.children)
         return {"$set": {self.name: self.children[0].doc()}}
 
 
@@ -46,9 +45,6 @@ class AggregationMapper(ast.NodeTransformer):
         self.cur_obj = None
         self.objects = []
 
-    def visit_UnaryOp(self, node):
-        print(node)
-
     def visit_BinOp(self, node: ast.BinOp):
         if not isinstance(node.left, PipelineObject):
             self.visit(node.left)
@@ -60,11 +56,6 @@ class AggregationMapper(ast.NodeTransformer):
             node.left = self.visit_BinOp(node.left)
         if isinstance(node.right, ast.BinOp):
             node.right = self.visit_BinOp(node.right)
-        print(
-            node.op,
-            PipelineObject.get_name(node.left),
-            PipelineObject.get_name(node.right),
-        )
 
         return PipelineObject(
             None, operation=ops_map[node.op.__class__], children=[node.left, node.right]
@@ -96,10 +87,12 @@ from bson.decimal128 import create_decimal128_context
 def basic_func():
     y = a + 0
     a = (a + b) / 2
-    b = (b * y) ** 1 / 2
+    b = (b * y) ** (1 / 2)
     t = t - (x * (y - a) ** 2)
     x = x * 2
 
+
+output_dict = transpile_function(basic_func)
 
 coll = MongoClient().db.coll
 coll.drop()
@@ -119,8 +112,7 @@ coll.insert_one(
         "y": Dec(1.0),
     }
 )
-output_dict = transpile_function(basic_func)
-print(output_dict)
+
 [coll.update_one({}, output_dict) for _ in range(int(log2(34)))]
 coll.update_one(
     {},
@@ -138,3 +130,4 @@ coll.update_one(
     ],
 )
 print(coll.find_one({}, projection={"pi": 1, "_id": 0}))
+from math import pi
