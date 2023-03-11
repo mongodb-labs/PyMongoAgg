@@ -112,6 +112,7 @@ from pymongo import MongoClient
 from decimal import localcontext
 from bson import Decimal128
 from bson.decimal128 import create_decimal128_context
+from decimal import localcontext, Decimal
 
 
 def basic_func():
