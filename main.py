@@ -109,7 +109,6 @@ def transpile_function(func):
 
 from math import sqrt, log2
 from pymongo import MongoClient
-from decimal import localcontext
 from bson import Decimal128
 from bson.decimal128 import create_decimal128_context
 from decimal import localcontext, Decimal
@@ -146,7 +145,7 @@ coll.insert_one(
     }
 )
 
-[coll.update_one({}, output_dict) for _ in range(int(34))]
+[coll.update_one({}, output_dict) for _ in range(int(log2(34)))]
 coll.update_one(
     {},
     [
