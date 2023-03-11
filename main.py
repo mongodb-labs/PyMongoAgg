@@ -41,7 +41,6 @@ class PipelineObject:
         return {"$set": {self.name: child}}
 
 
-
 ops_map = {
     ast.Add: "$add",
     ast.Mult: "$multiply",
@@ -79,7 +78,13 @@ class AggregationMapper(ast.NodeTransformer):
     def visit_Assign(self, node):
         pipelines = self.visit_BinOp(node.value)
         if isinstance(pipelines, str):
-            self.objects.append(PipelineObject(pipelines, operation=None, children=[self.visit_BinOp(n) for n in node.targets]))
+            self.objects.append(
+                PipelineObject(
+                    pipelines,
+                    operation=None,
+                    children=[self.visit_BinOp(n) for n in node.targets],
+                )
+            )
         else:
             self.objects.append(
                 PipelineObject(
@@ -88,8 +93,11 @@ class AggregationMapper(ast.NodeTransformer):
             )
 
     def visit_Call(self, node):
-        return PipelineObject(None, operation=f"${node.func.id}", children=list(map(self.visit_BinOp,node.args)))
-
+        return PipelineObject(
+            None,
+            operation=f"${node.func.id}",
+            children=list(map(self.visit_BinOp, node.args)),
+        )
 
 
 def transpile_function(func):
@@ -126,17 +134,18 @@ def Dec(x):
         return Decimal128(ctx.create_decimal(x))
 
 
+dec = Dec("1.00000000000000000000000000000000000")
 coll.insert_one(
     {
-        "x": Dec(1.0),
-        "a": Dec(1.0),
-        "b": Dec(1.0 / sqrt(2.0)),
-        "t": Dec(1.0 / 4),
-        "y": Dec(1.0),
+        "x": dec,
+        "a": dec,
+        "b": Dec(dec.to_decimal() / Decimal.sqrt(Dec(2.0).to_decimal())),
+        "t": Dec(dec.to_decimal() / 4),
+        "y": dec,
     }
 )
 
-[coll.update_one({}, output_dict) for _ in range(int(log2(34)))]
+[coll.update_one({}, output_dict) for _ in range(int(34))]
 coll.update_one(
     {},
     [
@@ -154,4 +163,7 @@ coll.update_one(
 )
 print(coll.find_one({}, projection={"pi": 1, "_id": 0}))
 from math import pi
+
 print(pi)
+3.141592653589793238462643383279502
+3.141592653589793111200356215084374
