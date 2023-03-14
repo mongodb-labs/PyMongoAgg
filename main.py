@@ -2,29 +2,43 @@ import ast, inspect
 
 
 class PipelineObject:
-    def __init__(self, name, operation=None, children=[]):
+    def __init__(self, name, operation=None, children=[], constant=False):
         self.name = name
         self.op = operation
         self.children = children
+        self.constant = constant
 
     @staticmethod
     def get_name(obj):
+        if obj is None:
+            return []
+        if isinstance(obj, int):
+            return int(obj)
+        if isinstance(obj, ast.Constant):
+            return obj.value
         if isinstance(obj, PipelineObject):
             return [PipelineObject.get_name(i) for i in obj.children]
-        if hasattr(obj, "id"):
-            return f"${obj.id}"
+
         if isinstance(obj, ast.BinOp):
             return PipelineObject.get_name(obj.left) or PipelineObject.get_name(
                 obj.right
             )
+        if hasattr(obj, "id"):
+            return f"${obj.id}"
         if isinstance(obj, str):
             return f"${obj}"
         return obj.value
 
     def doc(self):
-        if self.name and not self.op:
+        if self.children==[]:
+            return self.name
+        if self.constant:
+            return self.name
+        elif self.name and not self.op:
             children = [self.get_name(n) for n in self.children]
-            if len(children) == 1:
+            if len(children) == 1 and not self.constant:
+                if isinstance(self.children[0], PipelineObject):
+                    return {"$set": {self.name: self.children[0].doc()}}
                 return {"$set": {self.children[0]: f"${self.name}"}}
             return {"$set": {self.name: children}}
         if self.name is None:
@@ -34,11 +48,13 @@ class PipelineObject:
                     for i in self.children
                 ]
             }
-        if isinstance(self.children[0], str):
-            child = self.children[0]
-        else:
-            child = self.children[0].doc()
-        return {"$set": {self.name: child}}
+        if self.name:
+            if isinstance(self.children[0], str):
+                child = self.children[0]
+            else:
+                child = self.children[0].doc()
+            return {"$set": {self.name: child}}
+
 
 
 ops_map = {
@@ -47,6 +63,9 @@ ops_map = {
     ast.Sub: "$subtract",
     ast.Div: "$divide",
     ast.Pow: "$pow",
+    ast.And: "$and",
+    ast.Not: "$not",
+    ast.Or: "$or",
 }
 
 
@@ -56,16 +75,23 @@ class AggregationMapper(ast.NodeTransformer):
         self.objects = []
 
     def visit_BinOp(self, node):
+        if isinstance(node, ast.Constant):
+            return PipelineObject(node.value, None, [], constant=True)
         if isinstance(node, ast.Name):
             return node.id
+        if isinstance(node, ast.BoolOp):
+            for i in node.values:
+                self.visit_BinOp(i)
+            return PipelineObject(
+                None, operation=ops_map[node.op.__class__], children=[self.visit_BinOp(i) for i in node.values]
+            )
+        if isinstance(node, ast.UnaryOp):
+            self.visit_BinOp(node.operand)
+            return PipelineObject(
+                None, operation=ops_map[node.op.__class__], children=[self.visit_BinOp(node.operand)]
+            )
         if isinstance(node, ast.Call):
             return self.visit_Call(node)
-        if not isinstance(node.left, PipelineObject):
-            self.visit(node.left)
-        if not isinstance(node.right, PipelineObject):
-            self.visit(node.right)
-        if not isinstance(node.op, PipelineObject):
-            self.visit(node.op)
         if isinstance(node.left, ast.BinOp):
             node.left = self.visit_BinOp(node.left)
         if isinstance(node.right, ast.BinOp):
@@ -77,7 +103,13 @@ class AggregationMapper(ast.NodeTransformer):
 
     def visit_Assign(self, node):
         pipelines = self.visit_BinOp(node.value)
-        if isinstance(pipelines, str):
+        if isinstance(pipelines, PipelineObject):
+            self.objects.append(
+                PipelineObject(
+                    node.targets[0].id, operation=pipelines.op, children=[pipelines]
+                    )
+                )
+        else:
             self.objects.append(
                 PipelineObject(
                     pipelines,
@@ -85,12 +117,7 @@ class AggregationMapper(ast.NodeTransformer):
                     children=[self.visit_BinOp(n) for n in node.targets],
                 )
             )
-        else:
-            self.objects.append(
-                PipelineObject(
-                    node.targets[0].id, operation=pipelines.op, children=[pipelines]
-                )
-            )
+
 
     def visit_Call(self, node):
         return PipelineObject(
@@ -167,3 +194,27 @@ from math import pi
 print(pi)
 # {'pi': Decimal128('3.141592653589793238462643383472675')}
 #                    3.141592653589793238462643383279502
+
+
+def bool_func():
+    y = 1
+    a = (y and 0) and 1
+    b = y or 0
+    c = not y
+
+
+output_dict = transpile_function(bool_func)
+print(output_dict)
+coll.drop()
+coll.insert_one(
+    {
+        "y": 0,
+        "a": 1,
+        "b": 0,
+        "c": 1,
+    }
+)
+coll.update_one({}, output_dict)
+print(coll.find_one({}))
+#{'_id': ObjectId('6410106d834a827ffb542c72'), 'y': 1, 'a': False, 'b': True, 'c': False}
+
