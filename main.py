@@ -30,7 +30,7 @@ class PipelineObject:
         return obj.value
 
     def doc(self):
-        if self.children==[]:
+        if self.children == []:
             return self.name
         if self.constant:
             return self.name
@@ -56,7 +56,6 @@ class PipelineObject:
             return {"$set": {self.name: child}}
 
 
-
 ops_map = {
     ast.Add: "$add",
     ast.Mult: "$multiply",
@@ -67,6 +66,8 @@ ops_map = {
     ast.Not: "$not",
     ast.Or: "$or",
 }
+
+testing_ops = {"Deci"}
 
 
 class AggregationMapper(ast.NodeTransformer):
@@ -83,12 +84,16 @@ class AggregationMapper(ast.NodeTransformer):
             for i in node.values:
                 self.visit_BinOp(i)
             return PipelineObject(
-                None, operation=ops_map[node.op.__class__], children=[self.visit_BinOp(i) for i in node.values]
+                None,
+                operation=ops_map[node.op.__class__],
+                children=[self.visit_BinOp(i) for i in node.values],
             )
         if isinstance(node, ast.UnaryOp):
             self.visit_BinOp(node.operand)
             return PipelineObject(
-                None, operation=ops_map[node.op.__class__], children=[self.visit_BinOp(node.operand)]
+                None,
+                operation=ops_map[node.op.__class__],
+                children=[self.visit_BinOp(node.operand)],
             )
         if isinstance(node, ast.Call):
             return self.visit_Call(node)
@@ -107,8 +112,8 @@ class AggregationMapper(ast.NodeTransformer):
             self.objects.append(
                 PipelineObject(
                     node.targets[0].id, operation=pipelines.op, children=[pipelines]
-                    )
                 )
+            )
         else:
             self.objects.append(
                 PipelineObject(
@@ -118,8 +123,9 @@ class AggregationMapper(ast.NodeTransformer):
                 )
             )
 
-
     def visit_Call(self, node):
+        if node.func.id in testing_ops:
+            return
         return PipelineObject(
             None,
             operation=f"${node.func.id}",
@@ -138,15 +144,16 @@ from math import sqrt, log2
 from pymongo import MongoClient
 from bson import Decimal128
 from bson.decimal128 import create_decimal128_context
-from decimal import localcontext, Decimal
+from decimal import localcontext, Decimal as StdDeci, setcontext
 
 
-def basic_func():
+def basic_func(a, b, t, x):
     y = a
     a = (a + b) / 2
     b = sqrt(b * y)
     t = t - (x * (y - a) ** 2)
     x = x * 2
+    return a, b, t, x
 
 
 output_dict = transpile_function(basic_func)
@@ -161,16 +168,23 @@ def Dec(x):
         return Decimal128(ctx.create_decimal(x))
 
 
+def Deci(x):
+    with localcontext() as ctx:
+        ctx.prec = 34
+        setcontext(ctx)
+        return StdDeci(x)
+
+
 dec = Dec("1.00000000000000000000000000000000000")
-coll.insert_one(
-    {
-        "x": dec,
-        "a": dec,
-        "b": Dec(dec.to_decimal() / Decimal.sqrt(Dec(2.0).to_decimal())),
-        "t": Dec(dec.to_decimal() / 4),
-        "y": dec,
-    }
-)
+args = ["x", "a", "b", "t", "y"]
+arg_vals = [
+    dec,
+    dec,
+    Dec(dec.to_decimal() / StdDeci.sqrt(Dec(2.0).to_decimal())),
+    Dec(dec.to_decimal() / 4),
+    dec,
+]
+coll.insert_one(dict(zip(args, arg_vals)))
 
 [coll.update_one({}, output_dict) for _ in range(int(log2(34)))]
 coll.update_one(
@@ -188,33 +202,47 @@ coll.update_one(
         }
     ],
 )
-print(coll.find_one({}, projection={"pi": 1, "_id": 0}))
-from math import pi
-
-print(pi)
-# {'pi': Decimal128('3.141592653589793238462643383472675')}
-#                    3.141592653589793238462643383279502
+print(l := coll.find_one({}, projection={"pi": 1, "_id": 0})["pi"])
+# 3.141592653589793238462643383472675
+# 3.141592653589793238462643383279502
 
 
-def bool_func():
+# To make this test simpler I just calculated pi at float precision
+# (Otherwise I would have to do some nasty hacks in the ast parsing
+# ignore the large number of Decimal conversions I would have to do)
+def exercise_basic_func():
+    x = 1.0
+    a = x
+    b = x / sqrt(2)
+    t = x / 4
+    for _ in range(4):
+        a, b, t, x = basic_func(a, b, t, x)
+    return ((a + b) ** 2.0) / (4.0 * t)
+
+
+print((r := exercise_basic_func()))
+
+l = float(l.to_decimal())
+assert (l - r) < 1 / (10**17), "Pi test failed!"
+
+
+def bool_func(y, a, b, c):
     y = 1
     a = (y and 0) and 1
     b = y or 0
     c = not y
+    return y, a, b, c
 
 
 output_dict = transpile_function(bool_func)
 print(output_dict)
 coll.drop()
-coll.insert_one(
-    {
-        "y": 0,
-        "a": 1,
-        "b": 0,
-        "c": 1,
-    }
-)
+args = ["y", "a", "b", "c"]
+arg_vals = [0, 1, 0, 1]
+coll.insert_one(dict(zip(args, arg_vals)))
 coll.update_one({}, output_dict)
-print(coll.find_one({}))
-#{'_id': ObjectId('6410106d834a827ffb542c72'), 'y': 1, 'a': False, 'b': True, 'c': False}
-
+print(l := [bool(i) for i in coll.find_one({}, projection={"_id": 0}).values()])
+print(r := [bool(i) for i in bool_func(*arg_vals)])
+# [True, False, True, False]
+# [True, False, True, False]
+assert l == r, "Boolean test failed!"
