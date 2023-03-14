@@ -1,8 +1,13 @@
 import ast, inspect
+from math import sqrt, log2
+from pymongo import MongoClient
+from bson import Decimal128
+from bson.decimal128 import create_decimal128_context
+from decimal import localcontext, Decimal as StdDeci
 
 
 class PipelineObject:
-    def __init__(self, name, operation=None, children=[], constant=False):
+    def __init__(self, name, operation=None, children=None, constant=False):
         self.name = name
         self.op = operation
         self.children = children
@@ -10,8 +15,6 @@ class PipelineObject:
 
     @staticmethod
     def get_name(obj):
-        if obj is None:
-            return []
         if isinstance(obj, int):
             return int(obj)
         if isinstance(obj, ast.Constant):
@@ -30,7 +33,7 @@ class PipelineObject:
         return obj.value
 
     def doc(self):
-        if self.children == []:
+        if not self.children:
             return self.name
         if self.constant:
             return self.name
@@ -140,13 +143,6 @@ def transpile_function(func):
     return pipeline
 
 
-from math import sqrt, log2
-from pymongo import MongoClient
-from bson import Decimal128
-from bson.decimal128 import create_decimal128_context
-from decimal import localcontext, Decimal as StdDeci, setcontext
-
-
 def basic_func(a, b, t, x):
     y = a
     a = (a + b) / 2
@@ -166,13 +162,6 @@ coll.drop()
 def Dec(x):
     with localcontext(create_decimal128_context()) as ctx:
         return Decimal128(ctx.create_decimal(x))
-
-
-def Deci(x):
-    with localcontext() as ctx:
-        ctx.prec = 34
-        setcontext(ctx)
-        return StdDeci(x)
 
 
 dec = Dec("1.00000000000000000000000000000000000")
@@ -226,7 +215,7 @@ l = float(l.to_decimal())
 assert (l - r) < 1 / (10**17), "Pi test failed!"
 
 
-def bool_func(y, a, b, c):
+def bool_func():
     y = 1
     a = (y and 0) and 1
     b = y or 0
@@ -242,7 +231,7 @@ arg_vals = [0, 1, 0, 1]
 coll.insert_one(dict(zip(args, arg_vals)))
 coll.update_one({}, output_dict)
 print(l := [bool(i) for i in coll.find_one({}, projection={"_id": 0}).values()])
-print(r := [bool(i) for i in bool_func(*arg_vals)])
+print(r := [bool(i) for i in bool_func()])
 # [True, False, True, False]
 # [True, False, True, False]
 assert l == r, "Boolean test failed!"
