@@ -1,9 +1,9 @@
 import ast, inspect
-from math import sqrt, log2
+from math import sqrt, log2, ceil
 from pymongo import MongoClient
 from bson import Decimal128
 from bson.decimal128 import create_decimal128_context
-from decimal import localcontext, Decimal as StdDeci
+from decimal import localcontext, Decimal as StdDeci, getcontext
 
 
 class PipelineObject:
@@ -30,6 +30,11 @@ class PipelineObject:
             return f"${obj.id}"
         if isinstance(obj, str):
             return f"${obj}"
+        if isinstance(obj, ast.Call):
+            l = [PipelineObject.get_name(i) for i in obj.args]
+            if len(l) == 1:
+                l = l[0]
+            return {f"${obj.func.id}": l}
         return obj.value
 
     def doc(self):
@@ -63,14 +68,13 @@ ops_map = {
     ast.Add: "$add",
     ast.Mult: "$multiply",
     ast.Sub: "$subtract",
+    ast.USub: "$subtract",
     ast.Div: "$divide",
     ast.Pow: "$pow",
     ast.And: "$and",
     ast.Not: "$not",
     ast.Or: "$or",
 }
-
-testing_ops = {"Deci"}
 
 
 class AggregationMapper(ast.NodeTransformer):
@@ -92,6 +96,7 @@ class AggregationMapper(ast.NodeTransformer):
                 children=[self.visit_BinOp(i) for i in node.values],
             )
         if isinstance(node, ast.UnaryOp):
+            print(node.op)
             self.visit_BinOp(node.operand)
             return PipelineObject(
                 None,
@@ -127,13 +132,30 @@ class AggregationMapper(ast.NodeTransformer):
             )
 
     def visit_Call(self, node):
-        if node.func.id in testing_ops:
-            return
         return PipelineObject(
             None,
             operation=f"${node.func.id}",
             children=list(map(self.visit_BinOp, node.args)),
         )
+
+    def visit_AugAssign(self, node):
+        return
+        pipelines = self.visit_BinOp(node.value)
+        print(node.op, node.value, node.target)
+        if isinstance(pipelines, PipelineObject):
+            self.objects.append(
+                PipelineObject(
+                    node.target.id, operation=node.op, children=[pipelines],
+                    )
+                )
+        else:
+            self.objects.append(
+                PipelineObject(
+                    node.target.id,
+                    operation=node.op,
+                    children=[self.visit_BinOp(n) for n in pipelines],
+                    )
+                )
 
 
 def transpile_function(func):
@@ -143,14 +165,13 @@ def transpile_function(func):
     return pipeline
 
 
-def basic_func(a, b, t, x):
+def basic_func(a, b, t, x, y):
     y = a
     a = (a + b) / 2
     b = sqrt(b * y)
     t = t - (x * (y - a) ** 2)
     x = x * 2
     return a, b, t, x
-
 
 output_dict = transpile_function(basic_func)
 print(output_dict)
@@ -164,16 +185,9 @@ def Dec(x):
         return Decimal128(ctx.create_decimal(x))
 
 
-dec = Dec("1.00000000000000000000000000000000000")
-args = ["x", "a", "b", "t", "y"]
-arg_vals = [
-    dec,
-    dec,
-    Dec(dec.to_decimal() / StdDeci.sqrt(Dec(2.0).to_decimal())),
-    Dec(dec.to_decimal() / 4),
-    dec,
-]
-coll.insert_one(dict(zip(args, arg_vals)))
+dec = Dec("1.000000000000000000000000000000000000000000")
+coll.insert_one({"x": dec, "a": dec, "b":dec, "t": dec, "y": dec, })
+coll.update_one({}, [{'$set': {'b': {'$divide': ['$b', {'$sqrt': Dec(2.0)}]}}}, {'$set': {'t': {'$divide': ['$t', 4]}}}])
 
 [coll.update_one({}, output_dict) for _ in range(int(log2(34)))]
 coll.update_one(
@@ -195,23 +209,24 @@ print(l := coll.find_one({}, projection={"pi": 1, "_id": 0})["pi"])
 # 3.141592653589793238462643383472675
 # 3.141592653589793238462643383279502
 
-
 # To make this test simpler I just calculated pi at float precision
 # (Otherwise I would have to do some nasty hacks in the ast parsing
 # ignore the large number of Decimal conversions I would have to do)
 def exercise_basic_func():
-    x = 1.0
-    a = x
-    b = x / sqrt(2)
-    t = x / 4
-    for _ in range(4):
-        a, b, t, x = basic_func(a, b, t, x)
-    return ((a + b) ** 2.0) / (4.0 * t)
+    getcontext().prec = 34
+    x = StdDeci(1)
+    a = StdDeci(1)
+    b = StdDeci(1 / StdDeci.sqrt(StdDeci(2)))
+    t = StdDeci(1) / StdDeci(4.0)
+    y = StdDeci(1)
+    for _ in range(ceil(log2(34))):
+        a, b, t, x = [StdDeci(i) for i in basic_func(a, b, t, x, y)]
+    return StdDeci((a + b) ** StdDeci(2)) / (StdDeci(4) * t)
 
 
 print((r := exercise_basic_func()))
 
-l = float(l.to_decimal())
+l = l.to_decimal()
 assert (l - r) < 1 / (10**17), "Pi test failed!"
 
 
