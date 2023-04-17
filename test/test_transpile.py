@@ -1,4 +1,4 @@
-from main import transpile_function
+from pymongoagg import transpile_function
 from math import sqrt, log2, ceil
 from pymongo import MongoClient
 from bson import Decimal128
